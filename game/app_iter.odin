@@ -109,9 +109,19 @@ app_iter :: proc "c" (appstate: rawptr) -> sdl.AppResult {
     wns := state.wn_size
 
     // updates
-    INSTRUCTION_DURATION :: 1.0
-    // INSTRUCTION_DURATION :: (1.0/240.0)
-    active_instruction: ArrayInstruction
+
+    // change playback speed with arrow keys
+    if kb[sdl.Scancode.LEFT] {
+        state.playback_speed -= .50 * dt
+        state.playback_speed = max(state.playback_speed, 0.0)
+    } else if kb[sdl.Scancode.RIGHT] {
+        state.playback_speed += .50 * dt
+        state.playback_speed = min(state.playback_speed, 2.0)
+    }
+
+    INSTRUCTION_DURATION :: 0.5
+    active_instruction := ArrayInstruction{ .None, -1, -1 }
+
     if state.playback_state == .Playing {
         // aliases / copies
         elapsed := state.playback_elapsed
@@ -119,32 +129,35 @@ app_iter :: proc "c" (appstate: rawptr) -> sdl.AppResult {
         instructions := &state.array_instructions
         curr_idx := state.current_instruction_idx
 
-        for curr_idx < len(instructions) {
-            next_idx := curr_idx + 1
-            active_instruction = instructions[curr_idx]
+        if len(instructions) > 0 {
+            for curr_idx < len(instructions) {
+                next_idx := curr_idx + 1
+                active_instruction = instructions[curr_idx]
 
-            until_next := INSTRUCTION_DURATION * f32(next_idx) - elapsed
-            if until_next > 0.0 { break }
+                until_next := INSTRUCTION_DURATION * f32(next_idx) - elapsed
+                if until_next > 0.0 { break }
 
-            // perform swap before switching to next
-            if active_instruction.type == .Swap {
-                // there was some tomfoolery that happened
-                // fmt.printfln("swap %d | %d: %d, %d",
-                //              curr_idx, state.current_instruction_idx,
-                //              active_instruction.lhs, active_instruction.rhs)
+                // perform swap before switching to next
+                if active_instruction.type == .Swap {
+                    // there was some tomfoolery that happened
+                    // fmt.printfln("swap %d | %d: %d, %d",
+                    //              curr_idx, state.current_instruction_idx,
+                    //              active_instruction.lhs, active_instruction.rhs)
 
-                tmp := arr[active_instruction.lhs]
-                arr[active_instruction.lhs] = arr[active_instruction.rhs]
-                arr[active_instruction.rhs] = tmp
+                    tmp := arr[active_instruction.lhs]
+                    arr[active_instruction.lhs] = arr[active_instruction.rhs]
+                    arr[active_instruction.rhs] = tmp
+                }
+
+                state.current_instruction_idx = next_idx
+                curr_idx = state.current_instruction_idx
             }
-
-            state.current_instruction_idx = next_idx
-            curr_idx = state.current_instruction_idx
+            if curr_idx >= len(instructions) { state.playback_state = .Finished }
+            else { state.playback_elapsed += dt * state.playback_speed }
+        } else {
+            state.playback_state = .Finished
         }
-        if curr_idx >= len(instructions) { state.playback_state = .Finished }
-        else { state.playback_elapsed += dt }
-        // else { state.playback_elapsed += dt * 0.25 }
-    } else if state.playback_state == .Paused {
+    } else if state.playback_state == .Paused && len(state.array_instructions) > 0 {
         active_instruction = state.array_instructions[state.current_instruction_idx]
     }
 
@@ -191,7 +204,7 @@ app_iter :: proc "c" (appstate: rawptr) -> sdl.AppResult {
     }
 
     // render stair thing
-    WIDTH_PAD :: 10.0
+    WIDTH_PAD :: 30.0
     TOP_PAD :: 30.0
     MAX_HEIGHT := wns.y - TITLE_HEIGHT - TOP_PAD
     for elem, i in state.array_state {
@@ -218,195 +231,305 @@ app_iter :: proc "c" (appstate: rawptr) -> sdl.AppResult {
     // draw the animated swap
     WIDTH_STRETCH :: 4.0
     HEIGHT_STRETCH :: 20.0
-    if  active_instruction.type == .Swap &&
-        state.playback_state != .Finished
-    {
-        elapsed := state.playback_elapsed
-        array := &state.array_state
-        array_len := f32(len(state.array_state))
-        lhs_idx := active_instruction.lhs
-        rhs_idx := active_instruction.rhs
-
-
-        SWAP_DUR :: 0.35
-        next_idx := state.current_instruction_idx + 1
-        until_next := INSTRUCTION_DURATION - (INSTRUCTION_DURATION * f32(next_idx) - elapsed)
-        until_next = min(until_next, SWAP_DUR)
-        t := until_next / SWAP_DUR
-        t = ease.cubic_out(t)
-
-        // next_idx := state.current_instruction_idx + 1
-        // until_next := INSTRUCTION_DURATION * f32(next_idx) - elapsed
-        // t := (INSTRUCTION_DURATION - until_next) / INSTRUCTION_DURATION
-        // t = ease.quartic_in_out(t)
-
-        lhs_dst := sdl.FRect{}
-        lhs_value := f32(array[lhs_idx])
-        // lhs_dst.w = wns.x / array_len - 4.0
-
-        lhs_width := wns.x / array_len - WIDTH_PAD
-        lhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
-        lhs_dst.w = math.lerp(lhs_width_stretch, lhs_width, t)
-
-        lhs_height := MAX_HEIGHT * (lhs_value / array_len)
-        lhs_height_max := lhs_height + HEIGHT_STRETCH
-        lhs_dst.h = math.lerp(lhs_height_max, lhs_height, t)
-        lhs_dst.y = wns.y - lhs_dst.h
-
-        lhs_start_x := (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
-        lhs_end_x := (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
-        // lhs_start_x := wns.x * (f32(lhs_idx) / array_len) + 2.0
-        // lhs_end_x := wns.x * (f32(rhs_idx) / array_len) + 2.0
-
-        lhs_dst.x = math.lerp(lhs_start_x, lhs_end_x, t)
-
-
-        rhs_dst := sdl.FRect{}
-        rhs_value := f32(array[rhs_idx])
-        // rhs_dst.w = wns.x / array_len - 4.0
-
-        rhs_width := wns.x / array_len - WIDTH_PAD
-        rhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
-        rhs_dst.w = math.lerp(rhs_width_stretch, rhs_width, t)
-
-        rhs_height := MAX_HEIGHT * (rhs_value / array_len)
-        rhs_height_max := rhs_height + HEIGHT_STRETCH
-        rhs_dst.h = math.lerp(rhs_height_max, rhs_height, t)
-        rhs_dst.y = wns.y - rhs_dst.h
-
-        rhs_start_x := (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
-        rhs_end_x := (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
-
-        rhs_dst.x = math.lerp(rhs_start_x, rhs_end_x, t)
-
-        if state.playback_state == .Playing { sdl.SetRenderDrawColor(rr, 109, 229, 237, 255) }
-                                       else { sdl.SetRenderDrawColor(rr,  76, 112, 145, 255) }
-        sdl.RenderFillRect(rr, &lhs_dst)
-        sdl.RenderFillRect(rr, &rhs_dst)
-
-        debug_text := fmt.tprintf("instruction type: swap")
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("t value: %.2f", t)
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("lhs x: %.2f", lhs_dst.x)
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("rhs x: %.2f", rhs_dst.x)
-        add_debug_info(debug_text)
-    } // draw the animated compare
-    else if active_instruction.type == .Compare &&
+    if len(state.array_instructions) > 0 {
+        if  active_instruction.type == .Swap &&
             state.playback_state != .Finished
-    {
-        elapsed := state.playback_elapsed
-        array := &state.array_state
-        array_len := f32(len(state.array_state))
+        {
+            elapsed := state.playback_elapsed
+            array := &state.array_state
+            array_len := f32(len(state.array_state))
+            lhs_idx := active_instruction.lhs
+            rhs_idx := active_instruction.rhs
 
-        lhs_idx := active_instruction.lhs
-        rhs_idx := active_instruction.rhs
-        lhs_value := f32(array[lhs_idx])
-        rhs_value := f32(array[rhs_idx])
+            SWAP_DUR: f32 = INSTRUCTION_DURATION * 0.35
 
-        // COMPARE_DUR :: INSTRUCTION_DURATION
-        COMPARE_DUR :: 0.25
+            next_idx := state.current_instruction_idx + 1
+            until_next := INSTRUCTION_DURATION - (INSTRUCTION_DURATION * f32(next_idx) - elapsed)
+            until_next = min(until_next, SWAP_DUR)
+            t := until_next / SWAP_DUR
+            t = ease.cubic_out(t)
 
-        next_idx := state.current_instruction_idx + 1
-        until_next_inversed := INSTRUCTION_DURATION - (INSTRUCTION_DURATION * f32(next_idx) - elapsed)
-        until_anim_finish   := min(until_next_inversed, COMPARE_DUR)
-        lt := until_anim_finish / COMPARE_DUR
+            // next_idx := state.current_instruction_idx + 1
+            // until_next := INSTRUCTION_DURATION * f32(next_idx) - elapsed
+            // t := (INSTRUCTION_DURATION - until_next) / INSTRUCTION_DURATION
+            // t = ease.quartic_in_out(t)
 
-        // ease_return :: proc(t: f32, return_begin: f32 = 0.5) -> f32 {
-        //     t := t
-        //     if t < return_begin { t = 1 - math.pow(1 - t / return_begin, 2) }
-        //                    else { t = 1 - math.pow((t - return_begin) / (1.0 - return_begin), 2) }
-        //     return t
-        // }
+            // lhs
+            lhs_dst := sdl.FRect{}
+            lhs_value := f32(array[lhs_idx])
 
-        lhs_dst := sdl.FRect{}
+            lhs_width := wns.x / array_len - WIDTH_PAD
+            lhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+            lhs_dst.w = math.lerp(lhs_width_stretch, lhs_width, t)
 
-        lhs_width := wns.x / array_len - WIDTH_PAD
-        lhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+            lhs_height := MAX_HEIGHT * (lhs_value / array_len)
+            lhs_height_max := lhs_height + HEIGHT_STRETCH
+            lhs_dst.h = math.lerp(lhs_height_max, lhs_height, t)
+            lhs_dst.y = wns.y - lhs_dst.h
 
-        lhs_height := MAX_HEIGHT * (lhs_value / array_len)
-        lhs_height_max := lhs_height + HEIGHT_STRETCH
-        lhs_height_min := max(lhs_height - 20.0, wns.y * (1 / array_len))
+            lhs_start_x := (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
+            lhs_end_x := (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
 
-        rhs_dst := sdl.FRect{}
+            lhs_dst.x = math.lerp(lhs_start_x, lhs_end_x, t)
 
-        rhs_width := wns.x / array_len - WIDTH_PAD
-        rhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+            // rhs
+            rhs_dst := sdl.FRect{}
+            rhs_value := f32(array[rhs_idx])
 
-        rhs_height := MAX_HEIGHT * (rhs_value / array_len)
-        rhs_height_max := rhs_height + HEIGHT_STRETCH
-        // rhs_height_min := max(rhs_height - 20.0, wns.y * (1 / array_len))
+            rhs_width := wns.x / array_len - WIDTH_PAD
+            rhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+            rhs_dst.w = math.lerp(rhs_width_stretch, rhs_width, t)
 
-        lt = ease.quartic_out(lt)
-        lhs_dst.h = math.lerp(lhs_height, lhs_height_max, lt)
-        lhs_dst.w = math.lerp(lhs_width, lhs_width_stretch, lt)
+            rhs_height := MAX_HEIGHT * (rhs_value / array_len)
+            rhs_height_max := rhs_height + HEIGHT_STRETCH
+            rhs_dst.h = math.lerp(rhs_height_max, rhs_height, t)
+            rhs_dst.y = wns.y - rhs_dst.h
 
-        // if lt < 0.5 {
-        //     lt = ease_return(lt / 0.5)
-        //     lhs_dst.h = math.lerp(lhs_height, lhs_height_max, lt)
-        // } else {
-        //     lt = ease_return((lt - 0.5) / 0.5)
-        //     lhs_dst.h = math.lerp(lhs_height, lhs_height_min, lt)
-        // }
+            rhs_start_x := (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
+            rhs_end_x := (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
 
-        rhs_elapsed := (until_next_inversed - COMPARE_DUR)
-        until_rhs_anim_finish := min(rhs_elapsed, COMPARE_DUR)
-        rt := until_rhs_anim_finish / COMPARE_DUR
-        if rhs_elapsed > 0.0 {
-            rt = ease.quartic_out(rt)
-            rhs_dst.h = math.lerp(rhs_height, rhs_height_max, rt)
-            rhs_dst.w = math.lerp(rhs_width, rhs_width_stretch, rt)
-            // if rt < 0.5 {
-            //     rt = ease_return(rt / 0.5)
-            //     rhs_dst.h = math.lerp(rhs_height, rhs_height_max, rt)
-            // } else {
-            //     rt = ease_return((rt - 0.5) / 0.5)
-            //     rhs_dst.h = math.lerp(rhs_height, rhs_height_min, rt)
+            rhs_dst.x = math.lerp(rhs_start_x, rhs_end_x, t)
+
+            if state.playback_state == .Playing { sdl.SetRenderDrawColor(rr, 109, 229, 237, 255) }
+                                           else { sdl.SetRenderDrawColor(rr,  76, 112, 145, 255) }
+            sdl.RenderFillRect(rr, &lhs_dst)
+            sdl.RenderFillRect(rr, &rhs_dst)
+
+            debug_text: string
+            debug_text = "-- Swap Animation Debug Info --"
+            add_debug_info(debug_text)
+
+            debug_text = "instruction type: swap"
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("t value: %.2f", t)
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("lhs x: %.2f", lhs_dst.x)
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("rhs x: %.2f", rhs_dst.x)
+            add_debug_info(debug_text)
+        } // draw the animated compare
+        else if active_instruction.type == .Compare &&
+                state.playback_state != .Finished
+        {
+            elapsed := state.playback_elapsed
+            array := &state.array_state
+            array_len := f32(len(state.array_state))
+
+            lhs_idx := active_instruction.lhs
+            rhs_idx := active_instruction.rhs
+            lhs_value := f32(array[lhs_idx])
+            rhs_value := f32(array[rhs_idx])
+
+            // COMPARE_DUR :: INSTRUCTION_DURATION
+            COMPARE_DUR :: INSTRUCTION_DURATION * 0.25
+
+            next_idx := state.current_instruction_idx + 1
+            until_next_inversed := INSTRUCTION_DURATION - (INSTRUCTION_DURATION * f32(next_idx) - elapsed)
+            until_anim_finish   := min(until_next_inversed, COMPARE_DUR)
+            lt := until_anim_finish / COMPARE_DUR
+
+            // ease_return :: proc(t: f32, return_begin: f32 = 0.5) -> f32 {
+            //     t := t
+            //     if t < return_begin { t = 1 - math.pow(1 - t / return_begin, 2) }
+            //                    else { t = 1 - math.pow((t - return_begin) / (1.0 - return_begin), 2) }
+            //     return t
             // }
+
+            lhs_dst := sdl.FRect{}
+
+            lhs_width := wns.x / array_len - WIDTH_PAD
+            lhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+
+            lhs_height := MAX_HEIGHT * (lhs_value / array_len)
+            lhs_height_max := lhs_height + HEIGHT_STRETCH
+
+            rhs_dst := sdl.FRect{}
+
+            rhs_width := wns.x / array_len - WIDTH_PAD
+            rhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+
+            rhs_height := MAX_HEIGHT * (rhs_value / array_len)
+            rhs_height_max := rhs_height + HEIGHT_STRETCH
+
+            lt = ease.quartic_out(lt)
+            lhs_dst.h = math.lerp(lhs_height, lhs_height_max, lt)
+            lhs_dst.w = math.lerp(lhs_width, lhs_width_stretch, lt)
+
+            // if lt < 0.5 {
+            //     lt = ease_return(lt / 0.5)
+            //     lhs_dst.h = math.lerp(lhs_height, lhs_height_max, lt)
+            // } else {
+            //     lt = ease_return((lt - 0.5) / 0.5)
+            //     lhs_dst.h = math.lerp(lhs_height, lhs_height_min, lt)
+            // }
+
+            rhs_elapsed := (until_next_inversed - COMPARE_DUR)
+            until_rhs_anim_finish := min(rhs_elapsed, COMPARE_DUR)
+            rt := until_rhs_anim_finish / COMPARE_DUR
+            if rhs_elapsed > 0.0 {
+                rt = ease.quartic_out(rt)
+                rhs_dst.h = math.lerp(rhs_height, rhs_height_max, rt)
+                rhs_dst.w = math.lerp(rhs_width, rhs_width_stretch, rt)
+                // if rt < 0.5 {
+                //     rt = ease_return(rt / 0.5)
+                //     rhs_dst.h = math.lerp(rhs_height, rhs_height_max, rt)
+                // } else {
+                //     rt = ease_return((rt - 0.5) / 0.5)
+                //     rhs_dst.h = math.lerp(rhs_height, rhs_height_min, rt)
+                // }
+            }
+            else {
+                rhs_dst.h = rhs_height
+                rhs_dst.w = rhs_width
+            }
+
+            lhs_dst.x = (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
+            lhs_dst.y = wns.y - lhs_dst.h
+
+            rhs_dst.x = (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
+            rhs_dst.y = wns.y - rhs_dst.h
+
+            // if      state == 0 { sdl.SetRenderDrawColor(rr, 255, 0, 0, 255) }
+            // else if state == 1 { sdl.SetRenderDrawColor(rr, 0, 255, 0, 255) }
+            //               else { sdl.SetRenderDrawColor(rr, 0, 0, 255, 255) }
+            if state.playback_state == .Playing { sdl.SetRenderDrawColor(rr, 109, 229, 237, 255) }
+                                           else { sdl.SetRenderDrawColor(rr,  76, 112, 145, 255) }
+            sdl.RenderFillRect(rr, &lhs_dst)
+            sdl.RenderFillRect(rr, &rhs_dst)
+
+            debug_text: string
+            debug_text = "-- Compare Animation Debug Info --"
+            add_debug_info(debug_text)
+
+            debug_text = "instruction type: compare"
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("t value: %.2f", lt)
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("rt value: %.2f", rt)
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("until_next_inversed: %.2f", until_next_inversed)
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("until_anim_finish: %.2f", until_anim_finish)
+            add_debug_info(debug_text)
+
+            debug_text = fmt.tprintf("idk: %.2f", rhs_elapsed)
+            add_debug_info(debug_text)
+        } else if active_instruction.type == .CompareFalse &&
+                  state.playback_state != .Finished
+        {
+            elapsed := state.playback_elapsed
+            array := &state.array_state
+            array_len := f32(len(state.array_state))
+
+            lhs_idx := active_instruction.lhs
+            rhs_idx := active_instruction.rhs
+            lhs_value := f32(array[lhs_idx])
+            rhs_value := f32(array[rhs_idx])
+
+            SETTLE_DUR :: INSTRUCTION_DURATION * 0.5
+
+            next_idx := state.current_instruction_idx + 1
+            until_next_inversed := INSTRUCTION_DURATION - (INSTRUCTION_DURATION * f32(next_idx) - elapsed)
+            until_anim_finish   := min(until_next_inversed, SETTLE_DUR)
+            t := until_anim_finish / SETTLE_DUR
+
+            // lhs
+            lhs_dst := sdl.FRect{}
+            lhs_width := wns.x / array_len - WIDTH_PAD
+            lhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+
+            lhs_height := MAX_HEIGHT * (lhs_value / array_len)
+            lhs_height_max := lhs_height + HEIGHT_STRETCH
+
+            t = ease.quartic_out(t)
+            lhs_dst.h = math.lerp(lhs_height_max, lhs_height, t)
+            lhs_dst.w = math.lerp(lhs_width_stretch, lhs_width, t)
+
+            lhs_dst.x = (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
+            lhs_dst.y = wns.y - lhs_dst.h
+
+            // rhs
+            rhs_dst := sdl.FRect{}
+            rhs_width := wns.x / array_len - WIDTH_PAD
+            rhs_width_stretch := wns.x / array_len - WIDTH_PAD + WIDTH_STRETCH
+
+            rhs_height := MAX_HEIGHT * (rhs_value / array_len)
+            rhs_height_max := rhs_height + HEIGHT_STRETCH
+
+            rhs_dst.h = math.lerp(rhs_height_max, rhs_height, t)
+            rhs_dst.w = math.lerp(rhs_width_stretch, rhs_width, t)
+
+            rhs_dst.x = (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
+            rhs_dst.y = wns.y - rhs_dst.h
+
+            if state.playback_state == .Playing { sdl.SetRenderDrawColor(rr, 122, 245, 155, 255) }
+                                           else { sdl.SetRenderDrawColor(rr,  76, 112, 145, 255) }
+            sdl.RenderFillRect(rr, &lhs_dst)
+            sdl.RenderFillRect(rr, &rhs_dst)
+
         }
-        else {
-            rhs_dst.h = rhs_height
-            rhs_dst.w = rhs_width
-        }
-
-        lhs_dst.x = (wns.x * (f32(lhs_idx) / array_len) + WIDTH_PAD / 2.0) - (lhs_dst.w - lhs_width) / 2.0
-        rhs_dst.x = (wns.x * (f32(rhs_idx) / array_len) + WIDTH_PAD / 2.0) - (rhs_dst.w - rhs_width) / 2.0
-        lhs_dst.y = wns.y - lhs_dst.h
-        rhs_dst.y = wns.y - rhs_dst.h
-
-        // if      state == 0 { sdl.SetRenderDrawColor(rr, 255, 0, 0, 255) }
-        // else if state == 1 { sdl.SetRenderDrawColor(rr, 0, 255, 0, 255) }
-        //               else { sdl.SetRenderDrawColor(rr, 0, 0, 255, 255) }
-        if state.playback_state == .Playing { sdl.SetRenderDrawColor(rr, 109, 229, 237, 255) }
-                                       else { sdl.SetRenderDrawColor(rr,  76, 112, 145, 255) }
-        sdl.RenderFillRect(rr, &lhs_dst)
-        sdl.RenderFillRect(rr, &rhs_dst)
-
-        debug_text := fmt.tprintf("instruction type: compare")
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("t value: %.2f", lt)
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("rt value: %.2f", rt)
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("until_next_inversed: %.2f", until_next_inversed)
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("until_anim_finish: %.2f", until_anim_finish)
-        add_debug_info(debug_text)
-
-        debug_text = fmt.tprintf("idk: %.2f", rhs_elapsed)
-        add_debug_info(debug_text)
     }
 
     if kb[sdl.Scancode.P] { draw_easing_tests() }
     else { stopwatch = 0 }
+
+    // render playback speed slider
+    {
+        // draw line
+        pad :: 16.0
+
+        dst := sdl.FRect{}
+        dst.w = wns.x * 0.30
+        dst.h = 4.0
+        dst.x = pad
+        dst.y = wns.y - dst.h - pad
+
+        // draw slider
+        s_dst := sdl.FRect{}
+        s_dst.h = 16.0
+        s_dst.w = 16.0
+        s_dst.y = dst.y - (s_dst.h - dst.h) / 2.0
+        
+        t := state.playback_speed / 2.0
+        start_x := dst.x - s_dst.w / 2.0
+        end_x := (dst.x + dst.w) - s_dst.w / 2.0
+        s_dst.x = math.lerp(start_x, end_x, t)
+
+        text := get_text(.Dynamic)
+        ttf.SetTextString(text, fmt.ctprintf("Playback Speed (%.2f)\n- use arrow keys -", state.playback_speed), 0)
+        w, h: i32; ttf.GetTextSize(text, &w, &h)
+
+        x: f32 = dst.w / 2.0 + dst.x - f32(w) / 2.0
+        y: f32 = dst.y - f32(h) - 8.0
+
+        width_pad :f32: 16
+        height_pad :f32: 12.0
+        text_bg_dst := sdl.FRect{}
+        text_bg_dst.w = f32(w) + width_pad * 2
+        text_bg_dst.h = f32(h) + dst.h + 8.0 + height_pad * 2
+        text_bg_dst.x = x - width_pad
+        text_bg_dst.y = y - height_pad
+
+        sdl.SetRenderDrawBlendMode(rr, {.BLEND})
+        sdl.SetRenderDrawColor(rr, 0, 0, 0, 192)
+        sdl.RenderFillRect(rr, &text_bg_dst)
+
+        sdl.SetRenderDrawColor(rr, 0, 0, 0, 192)
+        sdl.RenderFillRect(rr, &dst)
+        sdl.SetRenderDrawBlendMode(rr, {})
+
+        sdl.SetRenderDrawColor(rr, 255, 0, 0, 255)
+        sdl.RenderFillRect(rr, &s_dst)
+
+        ttf.DrawRendererText(text, x, y)
+    }
 
     if len(debug_info.buf) > 0 {
         defer str.builder_reset(&debug_info)

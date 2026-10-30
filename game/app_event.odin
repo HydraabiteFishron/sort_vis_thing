@@ -1,5 +1,6 @@
 package game
 
+import "core:math/rand"
 import "base:runtime"
 import sdl "vendor:sdl3"
 
@@ -24,10 +25,21 @@ app_event :: proc "c" (appstate: rawptr, ev: ^sdl.Event) -> sdl.AppResult {
                 state.current_instruction_idx = 0
                 state.playback_state = .Playing
                 state.playback_elapsed = 0
+
+                copy(state.array_state, state.unsorted)
                 break
             }
 
             state.playback_state = .Playing if state.playback_state == .Paused else .Paused
+
+        case sdl.K_N:
+            state.current_instruction_idx = 0
+            state.playback_state = .Paused
+            state.playback_elapsed = 0
+
+            rand.shuffle(state.unsorted)
+            copy(state.array_state, state.unsorted)
+            bubble_sort(state.array_state, &state.array_instructions)
         }
     }
 

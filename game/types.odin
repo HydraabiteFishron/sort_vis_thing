@@ -14,11 +14,12 @@ FontID :: enum u8 {
 TextID :: enum u8 {
     QuittingText,
     Title,
-    DebugInfo
+    DebugInfo,
+    Dynamic
 }
 
 // thingies
 ArrayInstruction :: struct {
-    type: enum u8 { Compare, Swap },
+    type: enum u8 { None, Compare, CompareFalse, Swap },
     lhs, rhs: int
 }

@@ -1,5 +1,7 @@
 package game
 
+import "core:math/rand"
+
 import sdl "vendor:sdl3"
 import ttf "vendor:sdl3/ttf"
 
@@ -26,12 +28,14 @@ State :: struct {
     texts: [dynamic]^ttf.Text,
 
     // thingies
+    unsorted: []int,
     array_state: []int,
     array_instructions: [dynamic]ArrayInstruction,
     current_instruction_idx: int,
 
     playback_state: enum u8 { Paused, Playing, Finished },
-    playback_elapsed: f32
+    playback_elapsed,
+    playback_speed: f32,
 }
 
 g_state: State
@@ -53,10 +57,3 @@ get_text :: proc(id: TextID) -> ^ttf.Text {
     return g_state.texts[id]
 }
 
-// thingies
-init_array_state :: proc(array: ^[]int, amount: uint) {
-    array^ = make([]int, amount)
-    for &elem, i in array {
-        elem = i + 1
-    }
-}
